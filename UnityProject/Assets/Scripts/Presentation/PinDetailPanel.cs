@@ -3,6 +3,7 @@ using System;
 using UnityEngine;
 using UnityEngine.UI;
 using DG.Tweening;
+using Infrastructure;
 
 namespace Presentation
 {
@@ -17,6 +18,7 @@ namespace Presentation
 
         private AudioSource _audioSource;
         private string _currentAudioPath;
+        private Texture2D _imageTexture;
         private Action OnEdit;
         private CanvasGroup _canvasGroup;
 
@@ -26,13 +28,13 @@ namespace Presentation
             _audioSource = gameObject.AddComponent<AudioSource>();
             _closeButton.onClick.AddListener(() =>
             {
-                _audioSource.Stop();
+                StopAudio();
                 HideAnimated();
             });
             _playAudioButton.onClick.AddListener(PlayAudio);
             _editButton.onClick.AddListener(() =>
             {
-                _audioSource.Stop();
+                StopAudio();
                 gameObject.SetActive(false);
                 OnEdit?.Invoke();
             });
@@ -58,12 +60,23 @@ namespace Presentation
 
         public void Hide()
         {
-            _audioSource.Stop();
+            StopAudio();
             HideAnimated();
+        }
+
+        private void StopAudio()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            BrowserMedia.StopAudio();
+#else
+            _audioSource.Stop();
+#endif
         }
 
         private void LoadImage(string path)
         {
+            if (_imageTexture != null) Destroy(_imageTexture);
+            _imageTexture = null;
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
             {
                 _image.gameObject.SetActive(false);
@@ -71,16 +84,22 @@ namespace Presentation
             }
 
             var bytes = System.IO.File.ReadAllBytes(path);
-            var tex = new Texture2D(2, 2);
-            if (tex.LoadImage(bytes))
+            _imageTexture = new Texture2D(2, 2);
+            if (_imageTexture.LoadImage(bytes))
             {
-                _image.texture = tex;
+                _image.texture = _imageTexture;
                 _image.gameObject.SetActive(true);
 
                 var rect = _image.GetComponent<RectTransform>();
                 float height = rect.sizeDelta.y;
-                float width = height * ((float)tex.width / tex.height);
+                float width = height * ((float)_imageTexture.width / _imageTexture.height);
                 rect.sizeDelta = new Vector2(width, height);
+            }
+            else
+            {
+                Destroy(_imageTexture);
+                _imageTexture = null;
+                _image.gameObject.SetActive(false);
             }
         }
 
@@ -89,12 +108,16 @@ namespace Presentation
             if (string.IsNullOrEmpty(_currentAudioPath) ||
                 !System.IO.File.Exists(_currentAudioPath)) return;
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+            BrowserMedia.PlayAudio(_currentAudioPath);
+#else
             StartCoroutine(LoadAndPlayAudio(_currentAudioPath));
+#endif
         }
 
         private System.Collections.IEnumerator LoadAndPlayAudio(string path)
         {
-            var url = "file://" + path;
+            var url = new Uri(path).AbsoluteUri;
             var ext = System.IO.Path.GetExtension(path).ToLower();
             var type = AudioType.UNKNOWN;
 
@@ -122,6 +145,8 @@ namespace Presentation
 
         private void OnDestroy()
         {
+            StopAudio();
+            if (_imageTexture != null) Destroy(_imageTexture);
             transform.DOKill();
             _canvasGroup.DOKill();
         }

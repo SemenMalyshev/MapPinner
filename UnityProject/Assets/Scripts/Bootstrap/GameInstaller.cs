@@ -29,9 +29,8 @@ namespace Bootstrap
         private MapState _mapState;
         private CameraNavigationSystem _cameraNavSystem;
         private PinInteractionSystem _pinInteractionSystem;
-        private MapPersistenceService _persistenceService;
-        private PinCreationService _pinCreationService;
-        private PinViewFactory _pinViewFactory;
+        private IMapRepository _repository;
+        private IMouseInput _input;
 
         private readonly Dictionary<PinId, PinView> _pinViews = new();
         private PinView _selectedPinView;
@@ -43,23 +42,22 @@ namespace Bootstrap
         {
             UnityEngine.Application.targetFrameRate = 60;
 
-            var mouseInput = new UnityMouseInput();
-            var mapRepository = new JsonMapRepository();
+            _input = new UnityMouseInput();
             var selectionService = new PinSelectionService();
 
-            _persistenceService = new MapPersistenceService(mapRepository);
-            _pinCreationService = new PinCreationService();
-            _cameraNavSystem = new CameraNavigationSystem(mouseInput, _cameraView, _mapView);
-            _pinInteractionSystem = new PinInteractionSystem(mouseInput, selectionService, _cameraView);
-            _pinViewFactory = new PinViewFactory(_pinPrefab, _pinsContainer);
+            _repository = new JsonMapRepository();
+            _editPanel.SetBrowserReceiver(gameObject);
+            _cameraNavSystem = new CameraNavigationSystem(_input, _cameraView, _mapView);
+            _pinInteractionSystem = new PinInteractionSystem(_input, selectionService, _cameraView);
 
-            _mapState = _persistenceService.Load(new MapId(_mapId));
+            _mapState = new MapState(_repository.Load(new MapId(_mapId)));
             foreach (var pin in _mapState.Pins)
                 CreatePinView(pin);
 
             _pinInteractionSystem.OnEmptySpaceClick += HandleEmptySpaceClick;
             _pinInteractionSystem.OnPinSelected += HandlePinSelected;
             _pinInteractionSystem.OnPinDragStart += HandlePinDragStart;
+            _pinInteractionSystem.OnPinDragCancel += HandlePinDragCancel;
             _pinInteractionSystem.OnPinDragEnd += HandlePinDragEnd;
         }
 
@@ -67,29 +65,22 @@ namespace Bootstrap
         {
             if (!IsAnyPanelOpen)
             {
-                _cameraNavSystem.Tick();
+                _pinInteractionSystem.Tick(_mapState);
+                _cameraNavSystem.Tick(_pinInteractionSystem.IsPressingPin());
                 foreach (var pinView in _pinViews.Values)
                     pinView.UpdateScale(_cameraView.Camera.orthographicSize);
-                _pinInteractionSystem.Tick(_mapState);
             }
 
             if (_pinInteractionSystem.IsDragging() && _draggedPinView != null)
             {
-                var targetPos = (Vector3)_cameraView.ScreenToWorld(UnityEngine.Input.mousePosition);
+                var targetPos = (Vector3)_cameraView.ScreenToWorld(_input.GetMousePosition());
                 _draggedPinView.transform.position = Vector3.Lerp(_draggedPinView.transform.position, targetPos, Time.deltaTime * 10f);
             }
         }
 
-        void OnApplicationQuit()
-        {
-            if (_mapState != null) _persistenceService.Save(_mapState);
-        }
-
-
-
         private void HandleEmptySpaceClick(Vector2 worldPos)
         {
-            var newPin = _pinCreationService.CreatePinAt(worldPos);
+            var newPin = new PinEntity(PinId.NewId(), worldPos);
 
             _editPanel.Open(title: "", description: "", imagePath: "", audioPath: "", onSave: (title, desc, img, audio) =>
             {
@@ -100,7 +91,7 @@ namespace Bootstrap
 
                 _mapState.AddPin(newPin);
                 CreatePinView(newPin);
-                _persistenceService.Save(_mapState);
+                SaveMap();
             },
                 onDelete: null,
                 () => { }
@@ -134,7 +125,7 @@ namespace Bootstrap
                     pinEntity.Description = desc;
                     pinEntity.ImagePath = img;
                     pinEntity.AudioPath = audio;
-                    _persistenceService.Save(_mapState);
+                    SaveMap();
                 },
                 onDelete: () => DeletePin(pinEntity),
                 () => { }
@@ -145,12 +136,14 @@ namespace Bootstrap
         {
             if (_pinViews.TryGetValue(pinEntity.Id, out var pinView))
             {
-                _pinViewFactory.Destroy(pinView);
+                Destroy(pinView.gameObject);
                 _pinViews.Remove(pinEntity.Id);
             }
 
             _mapState.RemovePin(pinEntity.Id);
-            _persistenceService.Save(_mapState);
+            SaveMap();
+            BrowserMedia.DeleteImported(pinEntity.ImagePath);
+            BrowserMedia.DeleteImported(pinEntity.AudioPath);
 
             if (_selectedPinView != null &&
                 !_pinViews.ContainsValue(_selectedPinView))
@@ -176,16 +169,29 @@ namespace Bootstrap
             pinEntity.Position = newWorldPos;
             _draggedPinView.transform.position = new(newWorldPos.x, newWorldPos.y, 0);
             _draggedPinView.SetAttached(_cameraView.Camera.orthographicSize);
-            _persistenceService.Save(_mapState);
+            SaveMap();
+            _draggedPinView = null;
+        }
+
+        private void HandlePinDragCancel(PinEntity pinEntity)
+        {
+            if (_draggedPinView == null) return;
+            _draggedPinView.transform.position = pinEntity.Position;
+            _draggedPinView.SetAttached(_cameraView.Camera.orthographicSize);
             _draggedPinView = null;
         }
 
         private PinView CreatePinView(PinEntity entity)
         {
-            var view = _pinViewFactory.Create(entity);
+            var view = Instantiate(_pinPrefab, _pinsContainer);
+            view.Initialize(entity.Id, entity.Position);
             _pinViews.Add(entity.Id, view);
             return view;
         }
+
+        private void SaveMap() => _repository.Save(_mapState.ToData());
+
+        public void OnBrowserMediaPicked(string result) => _editPanel.OnBrowserMediaPicked(result);
 
         private void SelectPin(PinView newPin)
         {

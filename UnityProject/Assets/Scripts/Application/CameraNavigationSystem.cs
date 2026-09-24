@@ -12,7 +12,7 @@ namespace Application
         private readonly MapCameraView _cameraView;
         private readonly MapView _mapView;
         private Vector3 _lastMouseWorldPos;
-        private float _minZoom = 2f;
+        private const float MinZoom = 2f;
         private float _targetOrthographicSize;
 
         public CameraNavigationSystem(IMouseInput input, MapCameraView cameraView, MapView mapView)
@@ -23,22 +23,49 @@ namespace Application
             _targetOrthographicSize = cameraView.Camera.orthographicSize;
         }
 
-        public void Tick()
+        public void Tick(bool pinIsPressed)
         {
+            if (UnityEngine.Input.touchCount > 0)
+                HandleTouchNavigation(pinIsPressed);
             HandleZoom();
-            HandlePan();
+            if (UnityEngine.Input.touchCount == 0) HandlePan();
             ClampCamera();
+        }
+
+        private void HandleTouchNavigation(bool pinIsPressed)
+        {
+            if (UnityEngine.Input.touchCount == 2)
+            {
+                var first = UnityEngine.Input.GetTouch(0);
+                var second = UnityEngine.Input.GetTouch(1);
+                float currentDistance = Vector2.Distance(first.position, second.position);
+                float previousDistance = Vector2.Distance(first.position - first.deltaPosition, second.position - second.deltaPosition);
+                if (currentDistance > 1f && previousDistance > 1f)
+                    _targetOrthographicSize = Mathf.Clamp(_targetOrthographicSize * previousDistance / currentDistance, MinZoom, GetMaxZoom());
+            }
+            else if (UnityEngine.Input.touchCount == 1 && !pinIsPressed)
+            {
+                var touch = UnityEngine.Input.GetTouch(0);
+                if (touch.phase != TouchPhase.Moved) return;
+                var before = _cameraView.ScreenToWorld(touch.position - touch.deltaPosition);
+                var after = _cameraView.ScreenToWorld(touch.position);
+                _cameraView.transform.position += (Vector3)(before - after);
+            }
+        }
+
+        private float GetMaxZoom()
+        {
+            var bounds = _mapView.Bounds;
+            return Mathf.Max(MinZoom, Mathf.Min(bounds.size.x / _cameraView.Camera.aspect, bounds.size.y) * 0.5f);
         }
 
         private void HandleZoom()
         {
             var cam = _cameraView.Camera;
-            var bounds = _mapView.Bounds;
-            float maxZoom = Mathf.Min(bounds.size.x / cam.aspect, bounds.size.y) * 0.5f;
             float scroll = _input.GetMouseScrollDelta();
 
             if (Mathf.Abs(scroll) > 0.01f)
-                _targetOrthographicSize = Mathf.Clamp(_cameraView.Camera.orthographicSize - scroll * 1.5f, _minZoom, maxZoom);
+                _targetOrthographicSize = Mathf.Clamp(cam.orthographicSize - scroll * 1.5f, MinZoom, GetMaxZoom());
 
             _cameraView.Camera.orthographicSize = Mathf.MoveTowards(_cameraView.Camera.orthographicSize, _targetOrthographicSize, Time.deltaTime * ZoomSpeed);
         }
@@ -65,20 +92,16 @@ namespace Application
         {
             var cam = _cameraView.Camera;
             var bounds = _mapView.Bounds;
-            float h = cam.orthographicSize;
-            float w = h * cam.aspect;
-
-            float maxZoom = Mathf.Min(bounds.size.x / cam.aspect, bounds.size.y) * 0.5f;
-            float t = cam.orthographicSize / maxZoom;
-
-            float maxX = bounds.max.x - maxZoom * cam.aspect * t;
-            float minX = bounds.min.x + maxZoom * cam.aspect * t;
-            float maxY = bounds.max.y - maxZoom * t;
-            float minY = bounds.min.y + maxZoom * t;
+            float halfWidth = cam.orthographicSize * cam.aspect;
+            float halfHeight = cam.orthographicSize;
 
             var pos = _cameraView.transform.position;
-            pos.x = Mathf.Clamp(pos.x, minX, maxX);
-            pos.y = Mathf.Clamp(pos.y, minY, maxY);
+            pos.x = halfWidth >= bounds.extents.x
+                ? bounds.center.x
+                : Mathf.Clamp(pos.x, bounds.min.x + halfWidth, bounds.max.x - halfWidth);
+            pos.y = halfHeight >= bounds.extents.y
+                ? bounds.center.y
+                : Mathf.Clamp(pos.y, bounds.min.y + halfHeight, bounds.max.y - halfHeight);
             _cameraView.transform.position = pos;
         }
     }

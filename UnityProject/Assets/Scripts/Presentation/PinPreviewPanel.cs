@@ -18,6 +18,7 @@ namespace Presentation
         private Action OnReadMore;
         private Action OnEdit;
         private RectTransform _rect;
+        private Texture2D _imageTexture;
         private float _shownY;
         private float _hiddenY;
 
@@ -64,6 +65,8 @@ namespace Presentation
 
         private void LoadImage(string path)
         {
+            if (_imageTexture != null) Destroy(_imageTexture);
+            _imageTexture = null;
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
             {
                 _image.gameObject.SetActive(false);
@@ -71,16 +74,22 @@ namespace Presentation
             }
 
             var bytes = System.IO.File.ReadAllBytes(path);
-            var tex = new Texture2D(2, 2);
-            if (tex.LoadImage(bytes))
+            _imageTexture = new Texture2D(2, 2);
+            if (_imageTexture.LoadImage(bytes))
             {
-                _image.texture = tex;
+                _image.texture = _imageTexture;
                 _image.gameObject.SetActive(true);
 
                 var rect = _image.GetComponent<RectTransform>();
                 float height = rect.sizeDelta.y;
-                float width = height * ((float)tex.width / tex.height);
+                float width = height * ((float)_imageTexture.width / _imageTexture.height);
                 rect.sizeDelta = new Vector2(width, height);
+            }
+            else
+            {
+                Destroy(_imageTexture);
+                _imageTexture = null;
+                _image.gameObject.SetActive(false);
             }
         }
         private void HideAnimated()
@@ -90,6 +99,10 @@ namespace Presentation
                 .OnComplete(() => gameObject.SetActive(false));
         }
 
-        private void OnDestroy() => _rect.DOKill();
+        private void OnDestroy()
+        {
+            if (_imageTexture != null) Destroy(_imageTexture);
+            _rect.DOKill();
+        }
     }
 }

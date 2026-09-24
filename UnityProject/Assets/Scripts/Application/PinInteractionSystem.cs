@@ -25,6 +25,7 @@ namespace Application
 
         public System.Action<PinEntity> OnPinSelected;
         public System.Action<PinEntity> OnPinDragStart;
+        public System.Action<PinEntity> OnPinDragCancel;
         public System.Action<PinEntity, Vector2> OnPinDragEnd;
         public System.Action<Vector2> OnEmptySpaceClick;
 
@@ -37,6 +38,21 @@ namespace Application
 
         public void Tick(MapState mapState)
         {
+            if (UnityEngine.Input.touchCount > 1)
+            {
+                if (_currentState == State.Dragging) OnPinDragCancel?.Invoke(_pressedPin);
+                _currentState = State.Idle;
+                _pressedPin = null;
+                return;
+            }
+            if (UnityEngine.Input.touchCount == 1 && UnityEngine.Input.GetTouch(0).phase == TouchPhase.Canceled)
+            {
+                if (_currentState == State.Dragging) OnPinDragCancel?.Invoke(_pressedPin);
+                _currentState = State.Idle;
+                _pressedPin = null;
+                return;
+            }
+
             var mousePos = _input.GetMousePosition();
             var pinUnderMouse = _selectionService.FindPinAtScreenPosition(
                 new Vector2(mousePos.x, mousePos.y),
@@ -131,5 +147,6 @@ namespace Application
         }
 
         public bool IsDragging() => _currentState == State.Dragging;
+        public bool IsPressingPin() => _pressedPin != null && _currentState != State.Idle;
     }
 }

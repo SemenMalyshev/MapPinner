@@ -4,6 +4,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using DG.Tweening;
+using Infrastructure;
 
 namespace Presentation
 {
@@ -32,6 +33,10 @@ namespace Presentation
 
         private string _currentImagePath = "";
         private string _currentAudioPath = "";
+        private string _originalImagePath = "";
+        private string _originalAudioPath = "";
+        private Texture2D _previewTexture;
+        private GameObject _browserReceiver;
         private Action<string, string, string, string> OnSave;
         private Action OnDelete;
         private Action OnClose;
@@ -54,6 +59,8 @@ namespace Presentation
             gameObject.SetActive(false);
         }
 
+        public void SetBrowserReceiver(GameObject receiver) => _browserReceiver = receiver;
+
         public void Open(
             string title, string description,
             string imagePath, string audioPath,
@@ -65,11 +72,13 @@ namespace Presentation
             _descriptionInput.text = description;
             _currentImagePath = imagePath;
             _currentAudioPath = audioPath;
+            _originalImagePath = imagePath;
+            _originalAudioPath = audioPath;
             OnSave = onSave;
             OnDelete = onDelete;
             OnClose = onClose;
 
-            _audioLabel.text = string.IsNullOrEmpty(audioPath) ? "No audio choosed" : System.IO.Path.GetFileName(audioPath);
+            _audioLabel.text = string.IsNullOrEmpty(audioPath) ? "Аудио не выбрано" : System.IO.Path.GetFileName(audioPath);
 
             LoadImagePreview(imagePath);
 
@@ -96,23 +105,30 @@ namespace Presentation
                 _descriptionInput.text,
                 _currentImagePath,
                 _currentAudioPath);
+            if (_originalImagePath != _currentImagePath) BrowserMedia.DeleteImported(_originalImagePath);
+            if (_originalAudioPath != _currentAudioPath) BrowserMedia.DeleteImported(_originalAudioPath);
             HideAnimated();
         }
 
         private void OnCloseClicked()
         {
+            DeleteUnsavedMedia();
             OnClose?.Invoke();
             HideAnimated();
         }
 
         private void OnDeleteClicked()
         {
+            DeleteUnsavedMedia();
             OnDelete?.Invoke();
             HideAnimated();
         }
 
         private void OnPickImage()
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            BrowserMedia.Pick(_browserReceiver, "image");
+#else
             StartCoroutine(PickFileRoutine(
                 new[] { "png", "jpg", "jpeg" },
                 path =>
@@ -120,10 +136,14 @@ namespace Presentation
                     _currentImagePath = path;
                     LoadImagePreview(path);
                 }));
+#endif
         }
 
         private void OnPickAudio()
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            BrowserMedia.Pick(_browserReceiver, "audio");
+#else
             StartCoroutine(PickFileRoutine(
                 new[] { "mp3", "wav", "ogg" },
                 path =>
@@ -131,6 +151,38 @@ namespace Presentation
                     _currentAudioPath = path;
                     _audioLabel.text = System.IO.Path.GetFileName(path);
                 }));
+#endif
+        }
+
+        public void OnBrowserMediaPicked(string result)
+        {
+            var separator = result.IndexOf('|');
+            if (separator < 0) return;
+            var path = result.Substring(separator + 1);
+            if (!gameObject.activeInHierarchy)
+            {
+                BrowserMedia.DeleteImported(path);
+                return;
+            }
+
+            if (result.Substring(0, separator) == "image")
+            {
+                if (_currentImagePath != _originalImagePath) BrowserMedia.DeleteImported(_currentImagePath);
+                _currentImagePath = path;
+                LoadImagePreview(path);
+            }
+            else
+            {
+                if (_currentAudioPath != _originalAudioPath) BrowserMedia.DeleteImported(_currentAudioPath);
+                _currentAudioPath = path;
+                _audioLabel.text = System.IO.Path.GetFileName(path);
+            }
+        }
+
+        private void DeleteUnsavedMedia()
+        {
+            if (_currentImagePath != _originalImagePath) BrowserMedia.DeleteImported(_currentImagePath);
+            if (_currentAudioPath != _originalAudioPath) BrowserMedia.DeleteImported(_currentAudioPath);
         }
 
         private IEnumerator PickFileRoutine(string[] extensions, Action<string> onPicked)
@@ -145,6 +197,8 @@ namespace Presentation
 
         private void LoadImagePreview(string path)
         {
+            if (_previewTexture != null) Destroy(_previewTexture);
+            _previewTexture = null;
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
             {
                 _imagePreview.texture = null;
@@ -153,16 +207,22 @@ namespace Presentation
             }
 
             var bytes = System.IO.File.ReadAllBytes(path);
-            var tex = new Texture2D(2, 2);
-            if (tex.LoadImage(bytes))
+            _previewTexture = new Texture2D(2, 2);
+            if (_previewTexture.LoadImage(bytes))
             {
-                _imagePreview.texture = tex;
+                _imagePreview.texture = _previewTexture;
                 _imagePreview.gameObject.SetActive(true);
 
                 var rect = _imagePreview.GetComponent<RectTransform>();
                 float height = rect.sizeDelta.y;
-                float width = height * ((float)tex.width / tex.height);
+                float width = height * ((float)_previewTexture.width / _previewTexture.height);
                 rect.sizeDelta = new Vector2(width, height);
+            }
+            else
+            {
+                Destroy(_previewTexture);
+                _previewTexture = null;
+                _imagePreview.gameObject.SetActive(false);
             }
         }
         private void HideAnimated()
@@ -175,6 +235,7 @@ namespace Presentation
 
         private void OnDestroy()
         {
+            if (_previewTexture != null) Destroy(_previewTexture);
             _rect.DOKill();
             _canvasGroup.DOKill();
         }
